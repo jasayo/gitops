@@ -1,0 +1,91 @@
+---
+name: main
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  DATREE_TOKEN: ${{ secrets.DATREE_TOKEN }}
+
+jobs:
+
+  policy-check:
+    name: K8S Policy Check
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Run Datree Policy Check
+        uses: datreeio/action-datree@main
+        with:
+          path: 'apps/*/base/*.yaml'
+          cliArguments: '--only-k8s-files --ignore-missing-schemas'
+
+
+  security-scan:
+    name: Trivy Vulnerability Scanner
+    if: always()
+    needs:
+      - policy-check
+    runs-on: ubuntu-18.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Run Trivy vulnerability scanner in IaC mode
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          hide-progress: false
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  kube-linter:
+    name: Kube Linter
+    if: always()
+    needs:
+      - policy-check
+      - security-scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Scan repo
+        id: kube-lint-repo
+        uses: stackrox/kube-linter-action@v1.0.4
+        with:
+          directory: apps
+
+
+  slack-workflow-status:
+    name: Post Workflow Status To Slack
+    if: always()
+    needs:
+      - policy-check
+      - security-scan
+      - kube-linter
+    runs-on: ubuntu-latest
+    steps:
+      - name: Slack Workflow Notification
+        uses: Gamesight/slack-workflow-status@master
+        with:
+          # Required Input
+          repo_token: ${{secrets.ACCESS_TOKEN_GITHUB}}
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          # Optional Input
+          channel: 'github-notifications'
+          name: 'github-notifications'
+          # icon_emoji: ':poop:'
+          icon_url: ${{ secrets.SLACK_ICON }}
+
